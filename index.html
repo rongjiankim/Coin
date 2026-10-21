@@ -34,7 +34,7 @@
       const result = document.getElementById("result");
       result.textContent = "조회 중...";
       try {
-        const url = "https://api.coinone.co.kr/public/v2/ticker_new/KRW/BTC";
+const url = "https://coin-v3-api.mesio20.workers.dev";
         const response = await fetch(url);
         if (!response.ok) throw new Error("HTTP " + response.status);
         const data = await response.json();
