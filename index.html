@@ -1,1 +1,51 @@
 
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Coin V3</title>
+  <style>
+    body {
+      background: #0b1220;
+      color: white;
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+    h1 { color: #38bdf8; }
+    button {
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 8px;
+      background: #38bdf8;
+      font-weight: bold;
+    }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Coin V3</h1>
+  <p>코인원 BTC 실시간 시세 조회 테스트</p>
+  <button onclick="loadPrice()">시세 조회</button>
+  <pre id="result">버튼을 눌러주세요.</pre>
+
+  <script>
+    async function loadPrice() {
+      const result = document.getElementById("result");
+      result.textContent = "조회 중...";
+      try {
+        const url = "https://api.coinone.co.kr/public/v2/ticker_new/KRW/BTC";
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        const data = await response.json();
+        if (data.result !== "success") {
+          throw new Error(data.error_code || "API 오류");
+        }
+        result.textContent = JSON.stringify(data, null, 2);
+      } catch (error) {
+        result.textContent = "조회 실패: " + error.message;
+      }
+    }
+  </script>
+</body>
+</html>
