@@ -50,6 +50,8 @@ td:first-child,th:first-child{text-align:left}
 <div class="card">
 <h2>모의투자 설정</h2>
 <label>초기 가상자금 <input type="number" id="capital" value="5000000" min="100000" step="100000"> 원</label>
+<p><button id="backup">📥 모의계좌 백업(JSON)</button></p>
+<small>현재 보유 종목·현금·거래 기록·판단 기록을 파일로 저장합니다. 백업만 하며 계좌는 변경하지 않습니다.</small>
 <p><button id="reset" class="gray">모의계좌 초기화</button></p>
 <small>초기화하면 기존 보유 종목과 거래 기록이 삭제됩니다. 테스트 중에는 누르지 마세요.</small>
 </div>
@@ -106,7 +108,6 @@ const MIN_VOLUME=3e8;
 function buyLimit(v){
  return v<1e9?250000:v<3e9?400000:500000;
 }
-
 function slip(v){
  return v<3e8?.01:v<1e9?.005:v<3e9?.003:.001;
 }
@@ -131,14 +132,12 @@ function fresh(capital=5000000){
 }
 
 let account;
-
 try{
  account=JSON.parse(localStorage.getItem(KEY))||fresh();
  if(!account.positions||!Number.isFinite(account.cash))throw Error();
 }catch(e){
  account=fresh();
 }
-
 account.running=false;
 if(!Array.isArray(account.decisions))account.decisions=[];
 if(!Array.isArray(account.logs))account.logs=[];
@@ -177,7 +176,6 @@ function normalize(data){
   const first=num(t.first);
   const high=num(t.high);
   const low=num(t.low);
-
   return {
    symbol:String(t.target_currency||"").toUpperCase(),
    price,first,high,low,
@@ -193,17 +191,14 @@ function lists(){
  const vol=[...tickers]
   .sort((a,b)=>b.volume-a.volume)
   .slice(0,20);
-
  const rise=[...tickers]
   .sort((a,b)=>b.change-a.change)
   .slice(0,20);
-
  const candidates=[
   ...new Map(
    [...vol,...rise].map(t=>[t.symbol,t])
   ).values()
  ];
-
  return {
   vol,rise,candidates,
   topSymbols:new Set(candidates.map(t=>t.symbol))
@@ -213,22 +208,17 @@ function lists(){
 function sell(symbol,price,reason){
  const p=account.positions[symbol];
  if(!p)return;
-
  const v=(tickers.find(t=>t.symbol===symbol)||{}).volume||0;
  const fill=price*(1-slip(v));
  const net=p.qty*fill*(1-FEE);
-
  account.cash+=net;
-
  log(
   "매도 "+symbol+
   " · "+reason+
   " · 손익 "+won(net-p.cost)+
   " · 가상체결 "+fill.toLocaleString("ko-KR")
  );
-
  decision("매도 "+symbol+" · "+reason);
-
  delete account.positions[symbol];
  account.cooldowns[symbol]=now()+1800000;
 }
@@ -238,22 +228,16 @@ function buy(t){
   account.cash,
   buyLimit(t.volume)
  );
-
  if(budget<10000)return false;
-
  const fill=t.price*(1+slip(t.volume));
  const qty=budget/(fill*(1+FEE));
  const cost=qty*fill*(1+FEE);
-
  if(cost>account.cash+1e-7)return false;
-
  account.cash-=cost;
-
  const stopPct=Math.max(
   .02,
   Math.min(.08,t.range*1.5)
  );
-
  account.positions[t.symbol]={
   qty,
   cost,
@@ -265,13 +249,11 @@ function buy(t){
   outCount:0,
   lastObserved:t.price
  };
-
  log(
   "매수 "+t.symbol+
   " · "+won(cost)+
   " · 가상체결 "+fill.toLocaleString("ko-KR")
  );
-
  decision("매수 "+t.symbol+" · "+won(cost));
  return true;
 }
@@ -284,55 +266,43 @@ function simulate(){
 
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
-
   if(!t){
    decision("보유 "+symbol+" · 시세 없음, 판단 보류");
    continue;
   }
-
   const previous=account.lastPrices[symbol];
-
   if(previous&&t.price/previous-1<=-.05){
    sell(symbol,t.price,"급락 대응");
    continue;
   }
-
   p.high=Math.max(p.high,t.price);
-
   const trail=Math.max(
    .025,
    Math.min(.12,(p.range||.02)*2)
   );
-
   p.stop=Math.max(
    p.stop,
    p.high*(1-trail)
   );
-
   if(t.price<=p.stop){
    sell(symbol,t.price,"손절/트레일링");
    continue;
   }
-
   const outside=!ranking.topSymbols.has(symbol);
   const slowing=previous>0&&t.price<=previous;
-
   if(outside&&slowing){
    p.outCount=(p.outCount||0)+1;
   }else{
    p.outCount=0;
   }
-
   if(p.outCount>=3){
    sell(symbol,t.price,"TOP 20 이탈·상승 둔화");
    continue;
   }
-
   p.lastObserved=t.price;
  }
 
  let bought=0;
-
  const rejected={
   rise:0,
   volume:0,
@@ -340,7 +310,6 @@ function simulate(){
   cooldown:0,
   held:0
  };
-
  const options=[];
  const detail=[];
 
@@ -350,7 +319,6 @@ function simulate(){
    detail.push(t.symbol+" 보유 중");
    continue;
   }
-
   if(t.change<2||t.change>20){
    rejected.rise++;
    detail.push(
@@ -358,7 +326,6 @@ function simulate(){
    );
    continue;
   }
-
   if(t.volume<MIN_VOLUME){
    rejected.volume++;
    detail.push(
@@ -367,7 +334,6 @@ function simulate(){
    );
    continue;
   }
-
   if(
    !account.lastPrices[t.symbol]||
    t.price<=account.lastPrices[t.symbol]
@@ -378,15 +344,12 @@ function simulate(){
    );
    continue;
   }
-
   if(account.cooldowns[t.symbol]>now()){
    rejected.cooldown++;
    detail.push(t.symbol+" 재진입 제한");
    continue;
   }
-
   options.push(t);
-
   detail.push(
    t.symbol+" 매수 적격 · 거래대금 "+
    (t.volume/1e8).toFixed(2)+"억"
@@ -403,7 +366,6 @@ function simulate(){
  }
 
  const held=Object.keys(account.positions).length;
-
  const reason=
   held>=MAX_POSITIONS?"보유 한도 도달":
   account.cash<10000?"잔액 부족":
@@ -417,7 +379,6 @@ function simulate(){
   "개 · 보유 "+held+"/"+MAX_POSITIONS+
   " · "+reason
  );
-
  decision(
   "탈락 집계 · 기존보유 "+rejected.held+
   " · 상승률 범위 밖 "+rejected.rise+
@@ -425,15 +386,12 @@ function simulate(){
   " · 직전 대비 미상승/첫 관측 "+rejected.momentum+
   " · 재진입 제한 "+rejected.cooldown
  );
-
  for(const line of detail.slice(0,12)){
   decision("종목 판단 · "+line);
  }
-
  for(const t of tickers){
   account.lastPrices[t.symbol]=t.price;
  }
-
  save();
 }
 
@@ -441,33 +399,26 @@ function render(){
  const prices=new Map(
   tickers.map(t=>[t.symbol,t])
  );
-
  let holdings=0;
-
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
   holdings+=p.qty*(t?t.price:p.entry)*(1-FEE)*
    (1-slip(t?t.volume:0));
  }
-
  const equity=account.cash+holdings;
  const profit=equity-account.initial;
-
  $("equity").textContent=won(equity);
  $("pnl").textContent=
   (profit>=0?"+":"")+won(profit);
  $("pnl").className=
   "stat "+(profit>=0?"green":"red");
-
  $("roi").textContent=pct(
   profit/account.initial*100
  );
  $("roi").className=
   "stat "+(profit>=0?"green":"red");
-
  $("count").textContent=
   Object.keys(account.positions).length+"/"+MAX_POSITIONS;
-
  $("capital").value=account.initial;
  $("start").disabled=account.running;
  $("stop").disabled=!account.running;
@@ -475,12 +426,10 @@ function render(){
  const ranking=lists();
  const rows=tab==="volume"?ranking.vol:ranking.rise;
  const body=$("rankBody");
-
  body.replaceChildren();
 
  for(const t of rows){
   const tr=document.createElement("tr");
-
   [
    t.symbol,
    t.price.toLocaleString("ko-KR"),
@@ -489,14 +438,11 @@ function render(){
   ].forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-
    if(i===2){
     td.className=t.change>=0?"green":"red";
    }
-
    tr.append(td);
   });
-
   body.append(tr);
  }
 
@@ -507,15 +453,12 @@ function render(){
 
  const positions=$("positions");
  positions.replaceChildren();
-
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
   const price=t?t.price:p.entry;
   const net=p.qty*price*(1-FEE)*
    (1-slip(t?t.volume:0));
-
   const tr=document.createElement("tr");
-
   [
    symbol,
    won(net),
@@ -525,14 +468,11 @@ function render(){
   ].forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-
    if(i===2){
     td.className=net>=p.cost?"green":"red";
    }
-
    tr.append(td);
   });
-
   positions.append(tr);
  }
 
@@ -543,7 +483,6 @@ function render(){
 
  $("logs").textContent=
   account.logs.join("\n")||"기록 없음";
-
  $("decisions").textContent=
   account.decisions.join("\n")||
   "자동매매 시작 후 표시됩니다.";
@@ -552,17 +491,13 @@ function render(){
 async function refresh(){
  if(busy)return;
  busy=true;
-
  $("status").textContent="시세 조회 중...";
-
  try{
   const controller=new AbortController();
   const timer=setTimeout(
    ()=>controller.abort(),15000
   );
-
   let response;
-
   try{
    response=await fetch(
     API+"?t="+Date.now(),
@@ -574,13 +509,10 @@ async function refresh(){
   }finally{
    clearTimeout(timer);
   }
-
   if(!response.ok){
    throw Error("HTTP "+response.status);
   }
-
   const data=await response.json();
-
   if(
    data.result!=="success"||
    !Array.isArray(data.tickers)
@@ -589,27 +521,19 @@ async function refresh(){
     data.message||"전체 코인 데이터가 아닙니다"
    );
   }
-
   const received=normalize(data);
-
   if(!received.length){
    throw Error("유효한 시세 없음");
   }
-
   tickers=received;
-
   if(account.running){
    simulate();
   }
-
   $("status").textContent=
    "정상 연결 · "+tickers.length+"개 종목";
-
   $("updated").textContent=
    new Date().toLocaleTimeString("ko-KR");
-
   save();
-
  }catch(e){
   $("status").textContent=
    "조회 실패: "+e.message;
@@ -645,22 +569,49 @@ $("riseTab").onclick=()=>{
  render();
 };
 
+$("backup").onclick=()=>{
+ try{
+  save();
+  const snapshot=JSON.parse(JSON.stringify(account));
+  const backup={
+   format:"coin-v3-paper-backup",
+   version:1,
+   source:"Coin V3.4",
+   storageKey:KEY,
+   exportedAt:new Date().toISOString(),
+   account:snapshot
+  };
+  const blob=new Blob(
+   [JSON.stringify(backup,null,2)],
+   {type:"application/json;charset=utf-8"}
+  );
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="coin-v3.4-backup-"+
+   new Date().toISOString().slice(0,10)+".json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  alert("백업 파일 저장을 요청했습니다. 브라우저의 다운로드 목록에서 JSON 파일을 확인하세요.");
+ }catch(e){
+  alert("백업 실패: "+e.message);
+ }
+};
+
 $("reset").onclick=()=>{
  if(!confirm(
   "모의계좌와 거래 기록을 초기화할까요?"
  ))return;
-
  const amount=Number($("capital").value);
-
  if(!Number.isFinite(amount)||amount<100000){
   alert("초기 자금은 10만 원 이상이어야 합니다.");
   return;
  }
-
  account=fresh(amount);
  save();
  render();
-
  $("status").textContent="모의계좌 초기화 완료";
 };
 
