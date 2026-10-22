@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin V3.2</title>
+<title>Coin V3.3</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#091321;color:#e9f3ff;font-family:Arial,sans-serif;padding:14px}
@@ -24,11 +24,11 @@ td:first-child,th:first-child{text-align:left}
 .scroll{overflow-x:auto}
 .green{color:#35d6a0}
 .red{color:#ff7777}
-#logs,#decisions{max-height:260px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
+#logs,#decisions{max-height:360px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
 </style>
 </head>
 <body>
-<h1>Coin V3.2</h1>
+<h1>Coin V3.3</h1>
 <small>코인원 TOP 20 · 자금 순환 검증용 모의자동매매 · 실제 주문 없음</small>
 
 <div class="card">
@@ -55,7 +55,7 @@ td:first-child,th:first-child{text-align:left}
 </div>
 
 <div class="card">
-<h2>매매 판단 기록 (최근 10회)</h2>
+<h2>매매 판단 기록 (최근 30건)</h2>
 <div id="decisions">자동매매 시작 후 표시됩니다.</div>
 </div>
 
@@ -87,20 +87,28 @@ td:first-child,th:first-child{text-align:left}
 </div>
 
 <div class="card">
-<h2>Coin V3.2 매매 규칙</h2>
-<p class="note">매수: 거래대금 TOP 20과 상승률 TOP 20 합집합에서 상승률 2~15%, 거래대금 10억 원 이상, 직전 관측 대비 상승한 종목.</p>
+<h2>Coin V3.3 매매 규칙</h2>
+<p class="note">매수: 거래대금 TOP 20과 상승률 TOP 20 합집합에서 상승률 2~20%, 24시간 거래대금 1억 원 이상, 직전 관측 대비 상승한 종목.</p>
 <p class="note">매도: 손절·트레일링 스탑·급락 대응. TOP 20 양쪽에서 이탈하고 상승세 둔화가 3회 연속 확인되면 전량 매도.</p>
-<p class="note">최대 10종목, 신규 매수 1회당 초기자금의 10% 이내(잔액 한도), 매수·매도 수수료 각각 0.2% 가정, 매도 후 30분 재진입 제한.</p>
-<p class="note">변동성은 24시간 고저폭 기반 임시 근사치입니다. 정식 ATR, 슬리피지 및 실제 체결은 미반영입니다.</p>
+<p class="note">최대 10종목. 24시간 거래대금 1~3억: 10만 원, 3~10억: 25만 원, 10~30억: 40만 원, 30억 이상: 50만 원까지 매수. 수수료 매수·매도 각 0.2%, 매도 후 30분 재진입 제한.</p>
+<p class="note">변동성은 24시간 고저폭 근사치입니다. 거래대금별 가정 슬리피지(0.1~1%)를 적용하지만 실제 호가/체결 데이터가 아니며 정식 ATR은 미구현입니다.</p>
 </div>
 
 <script>
 "use strict";
+
 const API="https://coin-v3-api.mesio20.workers.dev";
 const KEY="coin-v3-paper-v1";
 const FEE=.002;
 const MAX_POSITIONS=10;
-const BUY_FRACTION=.10;
+
+function buyLimit(v){
+ return v<3e8?100000:v<1e9?250000:v<3e9?400000:500000;
+}
+function slip(v){
+ return v<3e8?.01:v<1e9?.005:v<3e9?.003:.001;
+}
+
 const $=id=>document.getElementById(id);
 const now=()=>Date.now();
 const num=x=>Number.isFinite(Number(x))?Number(x):0;
@@ -152,7 +160,7 @@ function log(s){
 
 function decision(s){
  account.decisions.unshift(new Date().toLocaleTimeString("ko-KR")+" · "+s);
- account.decisions=account.decisions.slice(0,10);
+ account.decisions=account.decisions.slice(0,30);
 }
 
 function normalize(data){
@@ -173,20 +181,11 @@ function normalize(data){
 }
 
 function lists(){
- const vol=[...tickers]
-  .sort((a,b)=>b.volume-a.volume)
-  .slice(0,20);
-
- const rise=[...tickers]
-  .sort((a,b)=>b.change-a.change)
-  .slice(0,20);
-
+ const vol=[...tickers].sort((a,b)=>b.volume-a.volume).slice(0,20);
+ const rise=[...tickers].sort((a,b)=>b.change-a.change).slice(0,20);
  const candidates=[
-  ...new Map(
-   [...vol,...rise].map(t=>[t.symbol,t])
-  ).values()
+  ...new Map([...vol,...rise].map(t=>[t.symbol,t])).values()
  ];
-
  return {
   vol,rise,candidates,
   topSymbols:new Set(candidates.map(t=>t.symbol))
@@ -197,13 +196,15 @@ function sell(symbol,price,reason){
  const p=account.positions[symbol];
  if(!p)return;
 
- const net=p.qty*price*(1-FEE);
+ const v=(tickers.find(t=>t.symbol===symbol)||{}).volume||0;
+ const fill=price*(1-slip(v));
+ const net=p.qty*fill*(1-FEE);
  account.cash+=net;
 
  log(
-  "매도 "+symbol+
-  " · "+reason+
-  " · 손익 "+won(net-p.cost)
+  "매도 "+symbol+" · "+reason+
+  " · 손익 "+won(net-p.cost)+
+  " · 가상체결 "+fill.toLocaleString("ko-KR")
  );
  decision("매도 "+symbol+" · "+reason);
 
@@ -212,29 +213,20 @@ function sell(symbol,price,reason){
 }
 
 function buy(t){
- const budget=Math.min(
-  account.cash,
-  account.initial*BUY_FRACTION
- );
-
+ const budget=Math.min(account.cash,buyLimit(t.volume));
  if(budget<10000)return false;
 
- const qty=budget/(t.price*(1+FEE));
- const cost=qty*t.price*(1+FEE);
-
+ const fill=t.price*(1+slip(t.volume));
+ const qty=budget/(fill*(1+FEE));
+ const cost=qty*fill*(1+FEE);
  if(cost>account.cash+1e-7)return false;
 
  account.cash-=cost;
 
- const stopPct=Math.max(
-  .02,
-  Math.min(.08,t.range*1.5)
- );
+ const stopPct=Math.max(.02,Math.min(.08,t.range*1.5));
 
  account.positions[t.symbol]={
-  qty,
-  cost,
-  entry:t.price,
+  qty,cost,entry:fill,
   high:t.price,
   stop:t.price*(1-stopPct),
   range:t.range,
@@ -243,15 +235,16 @@ function buy(t){
   lastObserved:t.price
  };
 
- log("매수 "+t.symbol+" · "+won(cost));
+ log(
+  "매수 "+t.symbol+" · "+won(cost)+
+  " · 가상체결 "+fill.toLocaleString("ko-KR")
+ );
  decision("매수 "+t.symbol+" · "+won(cost));
  return true;
 }
 
 function simulate(){
- const prices=new Map(
-  tickers.map(t=>[t.symbol,t])
- );
+ const prices=new Map(tickers.map(t=>[t.symbol,t]));
  const ranking=lists();
 
  for(const [symbol,p] of Object.entries(account.positions)){
@@ -276,10 +269,7 @@ function simulate(){
    Math.min(.12,(p.range||.02)*2)
   );
 
-  p.stop=Math.max(
-   p.stop,
-   p.high*(1-trail)
-  );
+  p.stop=Math.max(p.stop,p.high*(1-trail));
 
   if(t.price<=p.stop){
    sell(symbol,t.price,"손절/트레일링");
@@ -307,26 +297,28 @@ function simulate(){
  let bought=0;
 
  const rejected={
-  rise:0,
-  volume:0,
-  momentum:0,
-  cooldown:0,
-  held:0
+  rise:0,volume:0,momentum:0,cooldown:0,held:0
  };
-
  const options=[];
+ const detail=[];
 
  for(const t of ranking.candidates){
   if(account.positions[t.symbol]){
    rejected.held++;
+   detail.push(t.symbol+" 보유 중");
    continue;
   }
-  if(t.change<2||t.change>15){
+  if(t.change<2||t.change>20){
    rejected.rise++;
+   detail.push(t.symbol+" 상승률 "+pct(t.change)+" 범위 밖");
    continue;
   }
-  if(t.volume<1e9){
+  if(t.volume<1e8){
    rejected.volume++;
+   detail.push(
+    t.symbol+" 거래대금 "+
+    (t.volume/1e8).toFixed(2)+"억 부족"
+   );
    continue;
   }
   if(
@@ -334,13 +326,20 @@ function simulate(){
    t.price<=account.lastPrices[t.symbol]
   ){
    rejected.momentum++;
+   detail.push(t.symbol+" 직전 대비 미상승/첫 관측");
    continue;
   }
   if(account.cooldowns[t.symbol]>now()){
    rejected.cooldown++;
+   detail.push(t.symbol+" 재진입 제한");
    continue;
   }
+
   options.push(t);
+  detail.push(
+   t.symbol+" 매수 적격 · 거래대금 "+
+   (t.volume/1e8).toFixed(2)+"억"
+  );
  }
 
  options.sort((a,b)=>b.volume-a.volume);
@@ -352,7 +351,6 @@ function simulate(){
  }
 
  const held=Object.keys(account.positions).length;
-
  const reason=
   held>=MAX_POSITIONS?"보유 한도 도달":
   account.cash<10000?"잔액 부족":
@@ -375,6 +373,10 @@ function simulate(){
   " · 재진입 제한 "+rejected.cooldown
  );
 
+ for(const line of detail.slice(0,12)){
+  decision("종목 판단 · "+line);
+ }
+
  for(const t of tickers){
   account.lastPrices[t.symbol]=t.price;
  }
@@ -383,32 +385,23 @@ function simulate(){
 }
 
 function render(){
- const prices=new Map(
-  tickers.map(t=>[t.symbol,t])
- );
-
+ const prices=new Map(tickers.map(t=>[t.symbol,t]));
  let holdings=0;
 
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
-  holdings+=p.qty*(t?t.price:p.entry)*(1-FEE);
+  holdings+=p.qty*(t?t.price:p.entry)*(1-FEE)*
+   (1-slip(t?t.volume:0));
  }
 
  const equity=account.cash+holdings;
  const profit=equity-account.initial;
 
  $("equity").textContent=won(equity);
- $("pnl").textContent=
-  (profit>=0?"+":"")+won(profit);
- $("pnl").className=
-  "stat "+(profit>=0?"green":"red");
-
- $("roi").textContent=pct(
-  profit/account.initial*100
- );
- $("roi").className=
-  "stat "+(profit>=0?"green":"red");
-
+ $("pnl").textContent=(profit>=0?"+":"")+won(profit);
+ $("pnl").className="stat "+(profit>=0?"green":"red");
+ $("roi").textContent=pct(profit/account.initial*100);
+ $("roi").className="stat "+(profit>=0?"green":"red");
  $("count").textContent=
   Object.keys(account.positions).length+"/"+MAX_POSITIONS;
 
@@ -419,27 +412,21 @@ function render(){
  const ranking=lists();
  const rows=tab==="volume"?ranking.vol:ranking.rise;
  const body=$("rankBody");
-
  body.replaceChildren();
 
  for(const t of rows){
   const tr=document.createElement("tr");
-  const cells=[
+  [
    t.symbol,
    t.price.toLocaleString("ko-KR"),
    pct(t.change),
    (t.volume/1e8).toFixed(2)
-  ];
-
-  cells.forEach((value,i)=>{
+  ].forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-   if(i===2){
-    td.className=t.change>=0?"green":"red";
-   }
+   if(i===2)td.className=t.change>=0?"green":"red";
    tr.append(td);
   });
-
   body.append(tr);
  }
 
@@ -454,25 +441,19 @@ function render(){
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
   const price=t?t.price:p.entry;
-  const net=p.qty*price*(1-FEE);
-
+  const net=p.qty*price*(1-FEE)*(1-slip(t?t.volume:0));
   const tr=document.createElement("tr");
-  const cells=[
+
+  [
    symbol,
    won(net),
    pct((net/p.cost-1)*100),
    p.stop.toLocaleString("ko-KR"),
    (p.outCount||0)+"/3"
-  ];
-
-  cells.forEach((value,i)=>{
+  ].forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-
-   if(i===2){
-    td.className=net>=p.cost?"green":"red";
-   }
-
+   if(i===2)td.className=net>=p.cost?"green":"red";
    tr.append(td);
   });
 
@@ -495,67 +476,45 @@ function render(){
 async function refresh(){
  if(busy)return;
  busy=true;
-
  $("status").textContent="시세 조회 중...";
 
  try{
   const controller=new AbortController();
-  const timer=setTimeout(
-   ()=>controller.abort(),15000
-  );
-
+  const timer=setTimeout(()=>controller.abort(),15000);
   let response;
 
   try{
    response=await fetch(
     API+"?t="+Date.now(),
-    {
-     cache:"no-store",
-     signal:controller.signal
-    }
+    {cache:"no-store",signal:controller.signal}
    );
   }finally{
    clearTimeout(timer);
   }
 
-  if(!response.ok){
-   throw Error("HTTP "+response.status);
-  }
+  if(!response.ok)throw Error("HTTP "+response.status);
 
   const data=await response.json();
 
-  if(
-   data.result!=="success"||
-   !Array.isArray(data.tickers)
-  ){
-   throw Error(
-    data.message||"전체 코인 데이터가 아닙니다"
-   );
+  if(data.result!=="success"||!Array.isArray(data.tickers)){
+   throw Error(data.message||"전체 코인 데이터가 아닙니다");
   }
 
   const received=normalize(data);
-
-  if(!received.length){
-   throw Error("유효한 시세 없음");
-  }
+  if(!received.length)throw Error("유효한 시세 없음");
 
   tickers=received;
 
-  if(account.running){
-   simulate();
-  }
+  if(account.running)simulate();
 
   $("status").textContent=
    "정상 연결 · "+tickers.length+"개 종목";
-
   $("updated").textContent=
    new Date().toLocaleTimeString("ko-KR");
 
   save();
-
  }catch(e){
-  $("status").textContent=
-   "조회 실패: "+e.message;
+  $("status").textContent="조회 실패: "+e.message;
  }finally{
   busy=false;
   render();
@@ -589,12 +548,9 @@ $("riseTab").onclick=()=>{
 };
 
 $("reset").onclick=()=>{
- if(!confirm(
-  "모의계좌와 거래 기록을 초기화할까요?"
- ))return;
+ if(!confirm("모의계좌와 거래 기록을 초기화할까요?"))return;
 
  const amount=Number($("capital").value);
-
  if(!Number.isFinite(amount)||amount<100000){
   alert("초기 자금은 10만 원 이상이어야 합니다.");
   return;
@@ -603,7 +559,6 @@ $("reset").onclick=()=>{
  account=fresh(amount);
  save();
  render();
-
  $("status").textContent="모의계좌 초기화 완료";
 };
 
