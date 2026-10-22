@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin V3.1</title>
+<title>Coin V3.2</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#091321;color:#e9f3ff;font-family:Arial,sans-serif;padding:14px}
@@ -24,12 +24,12 @@ td:first-child,th:first-child{text-align:left}
 .scroll{overflow-x:auto}
 .green{color:#35d6a0}
 .red{color:#ff7777}
-#logs{max-height:200px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
+#logs,#decisions{max-height:260px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
 </style>
 </head>
 <body>
-<h1>Coin V3.1</h1>
-<small>코인원 TOP 20 · 공격형 자금 순환 모의자동매매 · 실제 주문 없음</small>
+<h1>Coin V3.2</h1>
+<small>코인원 TOP 20 · 자금 순환 검증용 모의자동매매 · 실제 주문 없음</small>
 
 <div class="card">
 <strong id="status">대기 중</strong>
@@ -37,7 +37,7 @@ td:first-child,th:first-child{text-align:left}
 <button id="refresh">시세 조회</button>
 <button id="start">자동매매 시작</button>
 <button id="stop" class="gray">일시정지</button>
-<p class="note">화면이 열려 있을 때 30초마다 매매를 판단합니다. 새로고침하거나 화면을 닫으면 자동매매가 중지됩니다.</p>
+<p class="note">화면이 열려 있을 때 30초마다 판단합니다. 새로고침하거나 화면을 닫으면 자동매매가 중지됩니다.</p>
 </div>
 
 <div class="grid">
@@ -49,11 +49,14 @@ td:first-child,th:first-child{text-align:left}
 
 <div class="card">
 <h2>모의투자 설정</h2>
-<label>초기 가상자금
-<input type="number" id="capital" value="5000000" min="100000" step="100000"> 원
-</label>
+<label>초기 가상자금 <input type="number" id="capital" value="5000000" min="100000" step="100000"> 원</label>
 <p><button id="reset" class="gray">모의계좌 초기화</button></p>
-<small>초기화하면 기존 보유 종목과 거래 기록이 삭제됩니다.</small>
+<small>초기화하면 기존 보유 종목과 거래 기록이 삭제됩니다. 테스트 중에는 누르지 마세요.</small>
+</div>
+
+<div class="card">
+<h2>매매 판단 기록 (최근 10회)</h2>
+<div id="decisions">자동매매 시작 후 표시됩니다.</div>
 </div>
 
 <div class="card">
@@ -84,27 +87,20 @@ td:first-child,th:first-child{text-align:left}
 </div>
 
 <div class="card">
-<h2>Coin V3.1 매매 규칙</h2>
-<p class="note">
-매수: 거래대금 TOP 20과 상승률 TOP 20 합집합에서 상승률 2~15%, 거래대금 10억 원 이상, 직전 관측 대비 상승한 종목.
-</p>
-<p class="note">
-매도: 손절·트레일링 스탑·급락 대응에 더해, TOP 20 양쪽에서 이탈하고 상승세 둔화가 연속 3회 확인되면 100% 전량 매도.
-</p>
-<p class="note">
-최대 3종목 보유, 매수·매도 수수료 각각 0.2% 가정, 매도 후 30분 재진입 제한.
-</p>
-<p class="note">
-현재 변동성 계산은 24시간 고저폭 기반 임시 근사치입니다. 정식 ATR 및 실제 호가·슬리피지는 아직 반영하지 않았습니다.
-</p>
+<h2>Coin V3.2 매매 규칙</h2>
+<p class="note">매수: 거래대금 TOP 20과 상승률 TOP 20 합집합에서 상승률 2~15%, 거래대금 10억 원 이상, 직전 관측 대비 상승한 종목.</p>
+<p class="note">매도: 손절·트레일링 스탑·급락 대응. TOP 20 양쪽에서 이탈하고 상승세 둔화가 3회 연속 확인되면 전량 매도.</p>
+<p class="note">최대 10종목, 신규 매수 1회당 초기자금의 10% 이내(잔액 한도), 매수·매도 수수료 각각 0.2% 가정, 매도 후 30분 재진입 제한.</p>
+<p class="note">변동성은 24시간 고저폭 기반 임시 근사치입니다. 정식 ATR, 슬리피지 및 실제 체결은 미반영입니다.</p>
 </div>
 
 <script>
 "use strict";
-
 const API="https://coin-v3-api.mesio20.workers.dev";
 const KEY="coin-v3-paper-v1";
 const FEE=.002;
+const MAX_POSITIONS=10;
+const BUY_FRACTION=.10;
 const $=id=>document.getElementById(id);
 const now=()=>Date.now();
 const num=x=>Number.isFinite(Number(x))?Number(x):0;
@@ -119,7 +115,8 @@ function fresh(capital=5000000){
   logs:[],
   cooldowns:{},
   lastPrices:{},
-  running:false
+  running:false,
+  decisions:[]
  };
 }
 
@@ -131,6 +128,10 @@ try{
  account=fresh();
 }
 account.running=false;
+if(!Array.isArray(account.decisions))account.decisions=[];
+if(!Array.isArray(account.logs))account.logs=[];
+if(!account.lastPrices)account.lastPrices={};
+if(!account.cooldowns)account.cooldowns={};
 
 let tickers=[];
 let tab="volume";
@@ -145,10 +146,13 @@ function save(){
 }
 
 function log(s){
- account.logs.unshift(
-  new Date().toLocaleTimeString("ko-KR")+" · "+s
- );
+ account.logs.unshift(new Date().toLocaleTimeString("ko-KR")+" · "+s);
  account.logs=account.logs.slice(0,80);
+}
+
+function decision(s){
+ account.decisions.unshift(new Date().toLocaleTimeString("ko-KR")+" · "+s);
+ account.decisions=account.decisions.slice(0,10);
 }
 
 function normalize(data){
@@ -183,11 +187,10 @@ function lists(){
   ).values()
  ];
 
- const topSymbols=new Set(
-  candidates.map(t=>t.symbol)
- );
-
- return {vol,rise,candidates,topSymbols};
+ return {
+  vol,rise,candidates,
+  topSymbols:new Set(candidates.map(t=>t.symbol))
+ };
 }
 
 function sell(symbol,price,reason){
@@ -202,6 +205,7 @@ function sell(symbol,price,reason){
   " · "+reason+
   " · 손익 "+won(net-p.cost)
  );
+ decision("매도 "+symbol+" · "+reason);
 
  delete account.positions[symbol];
  account.cooldowns[symbol]=now()+1800000;
@@ -209,14 +213,16 @@ function sell(symbol,price,reason){
 
 function buy(t){
  const budget=Math.min(
-  account.cash*.25,
-  account.initial*.25
+  account.cash,
+  account.initial*BUY_FRACTION
  );
- if(budget<10000)return;
+
+ if(budget<10000)return false;
 
  const qty=budget/(t.price*(1+FEE));
  const cost=qty*t.price*(1+FEE);
- if(cost>account.cash)return;
+
+ if(cost>account.cash+1e-7)return false;
 
  account.cash-=cost;
 
@@ -238,18 +244,23 @@ function buy(t){
  };
 
  log("매수 "+t.symbol+" · "+won(cost));
+ decision("매수 "+t.symbol+" · "+won(cost));
+ return true;
 }
 
 function simulate(){
  const prices=new Map(
   tickers.map(t=>[t.symbol,t])
  );
-
  const ranking=lists();
 
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
-  if(!t)continue;
+
+  if(!t){
+   decision("보유 "+symbol+" · 시세 없음, 판단 보류");
+   continue;
+  }
 
   const previous=account.lastPrices[symbol];
 
@@ -275,10 +286,7 @@ function simulate(){
    continue;
   }
 
-  // TOP 20 양쪽에서 이탈한 종목 확인
   const outside=!ranking.topSymbols.has(symbol);
-
-  // 직전 관측 대비 가격이 오르지 않았는지 확인
   const slowing=previous>0&&t.price<=previous;
 
   if(outside&&slowing){
@@ -287,7 +295,6 @@ function simulate(){
    p.outCount=0;
   }
 
-  // 3회 연속 이탈 + 상승 둔화면 전량 매도
   if(p.outCount>=3){
    sell(symbol,t.price,"TOP 20 이탈·상승 둔화");
    continue;
@@ -296,20 +303,77 @@ function simulate(){
   p.lastObserved=t.price;
  }
 
- const options=ranking.candidates.filter(t=>
-  t.change>=2&&
-  t.change<=15&&
-  t.volume>=1e9&&
-  account.lastPrices[t.symbol]&&
-  t.price>account.lastPrices[t.symbol]&&
-  !(account.cooldowns[t.symbol]>now())&&
-  !account.positions[t.symbol]
- ).sort((a,b)=>b.volume-a.volume);
+ let passed=0;
+ let bought=0;
+
+ const rejected={
+  rise:0,
+  volume:0,
+  momentum:0,
+  cooldown:0,
+  held:0
+ };
+
+ const options=[];
+
+ for(const t of ranking.candidates){
+  if(account.positions[t.symbol]){
+   rejected.held++;
+   continue;
+  }
+  if(t.change<2||t.change>15){
+   rejected.rise++;
+   continue;
+  }
+  if(t.volume<1e9){
+   rejected.volume++;
+   continue;
+  }
+  if(
+   !account.lastPrices[t.symbol]||
+   t.price<=account.lastPrices[t.symbol]
+  ){
+   rejected.momentum++;
+   continue;
+  }
+  if(account.cooldowns[t.symbol]>now()){
+   rejected.cooldown++;
+   continue;
+  }
+  options.push(t);
+ }
+
+ options.sort((a,b)=>b.volume-a.volume);
+ passed=options.length;
 
  for(const t of options){
-  if(Object.keys(account.positions).length>=3)break;
-  buy(t);
+  if(Object.keys(account.positions).length>=MAX_POSITIONS)break;
+  if(buy(t))bought++;
  }
+
+ const held=Object.keys(account.positions).length;
+
+ const reason=
+  held>=MAX_POSITIONS?"보유 한도 도달":
+  account.cash<10000?"잔액 부족":
+  passed===0?"조건 충족 후보 없음":
+  "조건 충족 후보 중 매수 처리";
+
+ decision(
+  "판단 완료 · TOP 합집합 "+ranking.candidates.length+
+  "개 · 적격 "+passed+
+  "개 · 신규 매수 "+bought+
+  "개 · 보유 "+held+"/"+MAX_POSITIONS+
+  " · "+reason
+ );
+
+ decision(
+  "탈락 집계 · 기존보유 "+rejected.held+
+  " · 상승률 범위 밖 "+rejected.rise+
+  " · 거래대금 부족 "+rejected.volume+
+  " · 직전 대비 미상승/첫 관측 "+rejected.momentum+
+  " · 재진입 제한 "+rejected.cooldown
+ );
 
  for(const t of tickers){
   account.lastPrices[t.symbol]=t.price;
@@ -346,7 +410,7 @@ function render(){
   "stat "+(profit>=0?"green":"red");
 
  $("count").textContent=
-  Object.keys(account.positions).length+"/3";
+  Object.keys(account.positions).length+"/"+MAX_POSITIONS;
 
  $("capital").value=account.initial;
  $("start").disabled=account.running;
@@ -422,6 +486,10 @@ function render(){
 
  $("logs").textContent=
   account.logs.join("\n")||"기록 없음";
+
+ $("decisions").textContent=
+  account.decisions.join("\n")||
+  "자동매매 시작 후 표시됩니다.";
 }
 
 async function refresh(){
