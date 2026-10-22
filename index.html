@@ -4,7 +4,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Coin V3</title>
+<title>Coin V3.1</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#091321;color:#e9f3ff;font-family:Arial,sans-serif;padding:14px}
@@ -24,12 +24,12 @@ td:first-child,th:first-child{text-align:left}
 .scroll{overflow-x:auto}
 .green{color:#35d6a0}
 .red{color:#ff7777}
-#logs{max-height:170px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
+#logs{max-height:200px;overflow:auto;white-space:pre-line;font-size:12px;line-height:1.8}
 </style>
 </head>
 <body>
-<h1>Coin V3</h1>
-<small>코인원 TOP 20 · 공격형 모의자동매매 · 실제 주문 없음</small>
+<h1>Coin V3.1</h1>
+<small>코인원 TOP 20 · 공격형 자금 순환 모의자동매매 · 실제 주문 없음</small>
 
 <div class="card">
 <strong id="status">대기 중</strong>
@@ -37,7 +37,7 @@ td:first-child,th:first-child{text-align:left}
 <button id="refresh">시세 조회</button>
 <button id="start">자동매매 시작</button>
 <button id="stop" class="gray">일시정지</button>
-<p class="note">화면이 열려 있을 때 30초마다 모의매매를 실행합니다. 화면을 닫으면 중지됩니다.</p>
+<p class="note">화면이 열려 있을 때 30초마다 매매를 판단합니다. 새로고침하거나 화면을 닫으면 자동매매가 중지됩니다.</p>
 </div>
 
 <div class="grid">
@@ -53,7 +53,7 @@ td:first-child,th:first-child{text-align:left}
 <input type="number" id="capital" value="5000000" min="100000" step="100000"> 원
 </label>
 <p><button id="reset" class="gray">모의계좌 초기화</button></p>
-<small>초기화하면 기존 거래 기록과 보유 종목이 삭제됩니다.</small>
+<small>초기화하면 기존 보유 종목과 거래 기록이 삭제됩니다.</small>
 </div>
 
 <div class="card">
@@ -72,7 +72,7 @@ td:first-child,th:first-child{text-align:left}
 <h2>보유 포지션</h2>
 <div class="scroll">
 <table>
-<thead><tr><th>종목</th><th>평가금액</th><th>수익률</th><th>손절가</th></tr></thead>
+<thead><tr><th>종목</th><th>평가금액</th><th>수익률</th><th>손절가</th><th>순위 이탈</th></tr></thead>
 <tbody id="positions"></tbody>
 </table>
 </div>
@@ -84,18 +84,24 @@ td:first-child,th:first-child{text-align:left}
 </div>
 
 <div class="card">
-<h2>현재 시험 매매 규칙</h2>
+<h2>Coin V3.1 매매 규칙</h2>
 <p class="note">
-거래대금 TOP 20과 상승률 TOP 20의 합집합에서 후보 선정.
-상승률 2~15%, 거래대금 10억 원 이상, 직전 관측 대비 상승 시 진입.
-최대 3종목 보유, 매수·매도 수수료 각각 0.2% 가정.
-변동성 기반 손절, 트레일링 스탑, 급락 시 청산 및 30분 재진입 제한.
+매수: 거래대금 TOP 20과 상승률 TOP 20 합집합에서 상승률 2~15%, 거래대금 10억 원 이상, 직전 관측 대비 상승한 종목.
 </p>
-<p class="note">현재 변동성 계산은 24시간 고저폭 기반 임시 근사치입니다. 정식 ATR은 캔들 데이터 연결 후 구현해야 합니다. 슬리피지와 실제 체결 조건은 반영하지 않았습니다.</p>
+<p class="note">
+매도: 손절·트레일링 스탑·급락 대응에 더해, TOP 20 양쪽에서 이탈하고 상승세 둔화가 연속 3회 확인되면 100% 전량 매도.
+</p>
+<p class="note">
+최대 3종목 보유, 매수·매도 수수료 각각 0.2% 가정, 매도 후 30분 재진입 제한.
+</p>
+<p class="note">
+현재 변동성 계산은 24시간 고저폭 기반 임시 근사치입니다. 정식 ATR 및 실제 호가·슬리피지는 아직 반영하지 않았습니다.
+</p>
 </div>
 
 <script>
 "use strict";
+
 const API="https://coin-v3-api.mesio20.workers.dev";
 const KEY="coin-v3-paper-v1";
 const FEE=.002;
@@ -107,211 +113,438 @@ const pct=x=>(x>=0?"+":"")+x.toFixed(2)+"%";
 
 function fresh(capital=5000000){
  return {
-  initial:capital,cash:capital,positions:{},
-  logs:[],cooldowns:{},lastPrices:{},running:false
+  initial:capital,
+  cash:capital,
+  positions:{},
+  logs:[],
+  cooldowns:{},
+  lastPrices:{},
+  running:false
  };
 }
+
 let account;
 try{
  account=JSON.parse(localStorage.getItem(KEY))||fresh();
  if(!account.positions||!Number.isFinite(account.cash))throw Error();
-}catch(e){account=fresh();}
+}catch(e){
+ account=fresh();
+}
 account.running=false;
-let tickers=[],tab="volume",busy=false;
+
+let tickers=[];
+let tab="volume";
+let busy=false;
 
 function save(){
- try{localStorage.setItem(KEY,JSON.stringify(account));}
- catch(e){console.warn("저장 실패",e);}
+ try{
+  localStorage.setItem(KEY,JSON.stringify(account));
+ }catch(e){
+  console.warn("저장 실패",e);
+ }
 }
+
 function log(s){
- account.logs.unshift(new Date().toLocaleTimeString("ko-KR")+" · "+s);
+ account.logs.unshift(
+  new Date().toLocaleTimeString("ko-KR")+" · "+s
+ );
  account.logs=account.logs.slice(0,80);
 }
+
 function normalize(data){
  return (data.tickers||[]).map(t=>{
-  const price=num(t.last),first=num(t.first);
-  const high=num(t.high),low=num(t.low);
+  const price=num(t.last);
+  const first=num(t.first);
+  const high=num(t.high);
+  const low=num(t.low);
   return {
    symbol:String(t.target_currency||"").toUpperCase(),
    price,first,high,low,
    volume:num(t.quote_volume),
    change:first>0?(price/first-1)*100:0,
-   range:price>0?Math.max(.012,Math.min(.06,(high-low)/price)):.02
+   range:price>0?
+    Math.max(.012,Math.min(.06,(high-low)/price)):.02
   };
  }).filter(t=>t.symbol&&t.price>0&&t.first>0);
 }
+
 function lists(){
- const vol=[...tickers].sort((a,b)=>b.volume-a.volume).slice(0,20);
- const rise=[...tickers].sort((a,b)=>b.change-a.change).slice(0,20);
- return {
-  vol,rise,
-  candidates:[...new Map([...vol,...rise].map(t=>[t.symbol,t])).values()]
- };
+ const vol=[...tickers]
+  .sort((a,b)=>b.volume-a.volume)
+  .slice(0,20);
+
+ const rise=[...tickers]
+  .sort((a,b)=>b.change-a.change)
+  .slice(0,20);
+
+ const candidates=[
+  ...new Map(
+   [...vol,...rise].map(t=>[t.symbol,t])
+  ).values()
+ ];
+
+ const topSymbols=new Set(
+  candidates.map(t=>t.symbol)
+ );
+
+ return {vol,rise,candidates,topSymbols};
 }
+
 function sell(symbol,price,reason){
  const p=account.positions[symbol];
  if(!p)return;
+
  const net=p.qty*price*(1-FEE);
  account.cash+=net;
- log("매도 "+symbol+" · "+reason+" · 손익 "+won(net-p.cost));
+
+ log(
+  "매도 "+symbol+
+  " · "+reason+
+  " · 손익 "+won(net-p.cost)
+ );
+
  delete account.positions[symbol];
  account.cooldowns[symbol]=now()+1800000;
 }
+
 function buy(t){
- const budget=Math.min(account.cash*.25,account.initial*.25);
+ const budget=Math.min(
+  account.cash*.25,
+  account.initial*.25
+ );
  if(budget<10000)return;
+
  const qty=budget/(t.price*(1+FEE));
  const cost=qty*t.price*(1+FEE);
  if(cost>account.cash)return;
+
  account.cash-=cost;
- const stopPct=Math.max(.02,Math.min(.08,t.range*1.5));
+
+ const stopPct=Math.max(
+  .02,
+  Math.min(.08,t.range*1.5)
+ );
+
  account.positions[t.symbol]={
-  qty,cost,entry:t.price,high:t.price,
+  qty,
+  cost,
+  entry:t.price,
+  high:t.price,
   stop:t.price*(1-stopPct),
-  range:t.range,entered:now()
+  range:t.range,
+  entered:now(),
+  outCount:0,
+  lastObserved:t.price
  };
+
  log("매수 "+t.symbol+" · "+won(cost));
 }
+
 function simulate(){
- const prices=new Map(tickers.map(t=>[t.symbol,t]));
+ const prices=new Map(
+  tickers.map(t=>[t.symbol,t])
+ );
+
+ const ranking=lists();
+
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
   if(!t)continue;
-  const prev=account.lastPrices[symbol];
-  if(prev&&t.price/prev-1<=-.05){
+
+  const previous=account.lastPrices[symbol];
+
+  if(previous&&t.price/previous-1<=-.05){
    sell(symbol,t.price,"급락 대응");
    continue;
   }
+
   p.high=Math.max(p.high,t.price);
-  const trail=Math.max(.025,Math.min(.12,p.range*2));
-  p.stop=Math.max(p.stop,p.high*(1-trail));
-  if(t.price<=p.stop)sell(symbol,t.price,"손절/트레일링");
+
+  const trail=Math.max(
+   .025,
+   Math.min(.12,(p.range||.02)*2)
+  );
+
+  p.stop=Math.max(
+   p.stop,
+   p.high*(1-trail)
+  );
+
+  if(t.price<=p.stop){
+   sell(symbol,t.price,"손절/트레일링");
+   continue;
+  }
+
+  // TOP 20 양쪽에서 이탈한 종목 확인
+  const outside=!ranking.topSymbols.has(symbol);
+
+  // 직전 관측 대비 가격이 오르지 않았는지 확인
+  const slowing=previous>0&&t.price<=previous;
+
+  if(outside&&slowing){
+   p.outCount=(p.outCount||0)+1;
+  }else{
+   p.outCount=0;
+  }
+
+  // 3회 연속 이탈 + 상승 둔화면 전량 매도
+  if(p.outCount>=3){
+   sell(symbol,t.price,"TOP 20 이탈·상승 둔화");
+   continue;
+  }
+
+  p.lastObserved=t.price;
  }
- const options=lists().candidates.filter(t=>
-  t.change>=2&&t.change<=15&&t.volume>=1e9&&
+
+ const options=ranking.candidates.filter(t=>
+  t.change>=2&&
+  t.change<=15&&
+  t.volume>=1e9&&
   account.lastPrices[t.symbol]&&
   t.price>account.lastPrices[t.symbol]&&
   !(account.cooldowns[t.symbol]>now())&&
   !account.positions[t.symbol]
  ).sort((a,b)=>b.volume-a.volume);
+
  for(const t of options){
   if(Object.keys(account.positions).length>=3)break;
   buy(t);
  }
- for(const t of tickers)account.lastPrices[t.symbol]=t.price;
+
+ for(const t of tickers){
+  account.lastPrices[t.symbol]=t.price;
+ }
+
  save();
 }
+
 function render(){
- const prices=new Map(tickers.map(t=>[t.symbol,t]));
+ const prices=new Map(
+  tickers.map(t=>[t.symbol,t])
+ );
+
  let holdings=0;
+
  for(const [symbol,p] of Object.entries(account.positions)){
   const t=prices.get(symbol);
   holdings+=p.qty*(t?t.price:p.entry)*(1-FEE);
  }
+
  const equity=account.cash+holdings;
  const profit=equity-account.initial;
+
  $("equity").textContent=won(equity);
- $("pnl").textContent=(profit>=0?"+":"")+won(profit);
- $("pnl").className="stat "+(profit>=0?"green":"red");
- $("roi").textContent=pct(profit/account.initial*100);
- $("roi").className="stat "+(profit>=0?"green":"red");
- $("count").textContent=Object.keys(account.positions).length+"/3";
+ $("pnl").textContent=
+  (profit>=0?"+":"")+won(profit);
+ $("pnl").className=
+  "stat "+(profit>=0?"green":"red");
+
+ $("roi").textContent=pct(
+  profit/account.initial*100
+ );
+ $("roi").className=
+  "stat "+(profit>=0?"green":"red");
+
+ $("count").textContent=
+  Object.keys(account.positions).length+"/3";
+
  $("capital").value=account.initial;
  $("start").disabled=account.running;
  $("stop").disabled=!account.running;
 
- const listsData=lists();
- const ranking=tab==="volume"?listsData.vol:listsData.rise;
+ const ranking=lists();
+ const rows=tab==="volume"?ranking.vol:ranking.rise;
  const body=$("rankBody");
+
  body.replaceChildren();
- for(const t of ranking){
+
+ for(const t of rows){
   const tr=document.createElement("tr");
   const cells=[
-   t.symbol,t.price.toLocaleString("ko-KR"),
-   pct(t.change),Math.round(t.volume/1e8).toLocaleString("ko-KR")
+   t.symbol,
+   t.price.toLocaleString("ko-KR"),
+   pct(t.change),
+   (t.volume/1e8).toFixed(2)
   ];
+
   cells.forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-   if(i===2)td.className=t.change>=0?"green":"red";
+   if(i===2){
+    td.className=t.change>=0?"green":"red";
+   }
    tr.append(td);
   });
+
   body.append(tr);
  }
- if(!ranking.length)body.innerHTML='<tr><td colspan="4">시세 조회 전</td></tr>';
+
+ if(!rows.length){
+  body.innerHTML=
+   '<tr><td colspan="4">시세 조회 전</td></tr>';
+ }
 
  const positions=$("positions");
  positions.replaceChildren();
+
  for(const [symbol,p] of Object.entries(account.positions)){
-  const t=prices.get(symbol),price=t?t.price:p.entry;
+  const t=prices.get(symbol);
+  const price=t?t.price:p.entry;
   const net=p.qty*price*(1-FEE);
+
   const tr=document.createElement("tr");
-  [symbol,won(net),pct((net/p.cost-1)*100),
-   p.stop.toLocaleString("ko-KR")].forEach((value,i)=>{
+  const cells=[
+   symbol,
+   won(net),
+   pct((net/p.cost-1)*100),
+   p.stop.toLocaleString("ko-KR"),
+   (p.outCount||0)+"/3"
+  ];
+
+  cells.forEach((value,i)=>{
    const td=document.createElement("td");
    td.textContent=value;
-   if(i===2)td.className=net>=p.cost?"green":"red";
+
+   if(i===2){
+    td.className=net>=p.cost?"green":"red";
+   }
+
    tr.append(td);
   });
+
   positions.append(tr);
  }
- if(!positions.children.length)
-  positions.innerHTML='<tr><td colspan="4">보유 없음</td></tr>';
- $("logs").textContent=account.logs.join("\n")||"기록 없음";
+
+ if(!positions.children.length){
+  positions.innerHTML=
+   '<tr><td colspan="5">보유 없음</td></tr>';
+ }
+
+ $("logs").textContent=
+  account.logs.join("\n")||"기록 없음";
 }
+
 async function refresh(){
  if(busy)return;
  busy=true;
+
  $("status").textContent="시세 조회 중...";
+
  try{
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),15000);
+  const timer=setTimeout(
+   ()=>controller.abort(),15000
+  );
+
   let response;
+
   try{
-   response=await fetch(API+"?t="+Date.now(),{
-    cache:"no-store",signal:controller.signal
-   });
-  }finally{clearTimeout(timer);}
-  if(!response.ok)throw Error("HTTP "+response.status);
+   response=await fetch(
+    API+"?t="+Date.now(),
+    {
+     cache:"no-store",
+     signal:controller.signal
+    }
+   );
+  }finally{
+   clearTimeout(timer);
+  }
+
+  if(!response.ok){
+   throw Error("HTTP "+response.status);
+  }
+
   const data=await response.json();
-  if(data.result!=="success"||!Array.isArray(data.tickers))
-   throw Error(data.message||"전체 코인 데이터가 아닙니다");
-  tickers=normalize(data);
-  if(!tickers.length)throw Error("유효한 시세 없음");
-  if(account.running)simulate();
-  $("status").textContent="정상 연결 · "+tickers.length+"개 종목";
-  $("updated").textContent=new Date().toLocaleTimeString("ko-KR");
+
+  if(
+   data.result!=="success"||
+   !Array.isArray(data.tickers)
+  ){
+   throw Error(
+    data.message||"전체 코인 데이터가 아닙니다"
+   );
+  }
+
+  const received=normalize(data);
+
+  if(!received.length){
+   throw Error("유효한 시세 없음");
+  }
+
+  tickers=received;
+
+  if(account.running){
+   simulate();
+  }
+
+  $("status").textContent=
+   "정상 연결 · "+tickers.length+"개 종목";
+
+  $("updated").textContent=
+   new Date().toLocaleTimeString("ko-KR");
+
   save();
+
  }catch(e){
-  $("status").textContent="조회 실패: "+e.message;
+  $("status").textContent=
+   "조회 실패: "+e.message;
  }finally{
   busy=false;
   render();
  }
 }
+
 $("refresh").onclick=refresh;
+
 $("start").onclick=()=>{
- account.running=true;save();render();refresh();
+ account.running=true;
+ save();
+ render();
+ refresh();
 };
+
 $("stop").onclick=()=>{
- account.running=false;save();
- $("status").textContent="모의매매 일시정지";render();
+ account.running=false;
+ save();
+ $("status").textContent="모의매매 일시정지";
+ render();
 };
-$("volumeTab").onclick=()=>{tab="volume";render();};
-$("riseTab").onclick=()=>{tab="rise";render();};
+
+$("volumeTab").onclick=()=>{
+ tab="volume";
+ render();
+};
+
+$("riseTab").onclick=()=>{
+ tab="rise";
+ render();
+};
+
 $("reset").onclick=()=>{
- if(!confirm("모의계좌와 거래 기록을 초기화할까요?"))return;
+ if(!confirm(
+  "모의계좌와 거래 기록을 초기화할까요?"
+ ))return;
+
  const amount=Number($("capital").value);
+
  if(!Number.isFinite(amount)||amount<100000){
-  alert("초기 자금은 10만 원 이상이어야 합니다.");return;
+  alert("초기 자금은 10만 원 이상이어야 합니다.");
+  return;
  }
+
  account=fresh(amount);
- save();render();
+ save();
+ render();
+
  $("status").textContent="모의계좌 초기화 완료";
 };
+
 render();
 refresh();
-setInterval(()=>{if(account.running)refresh();},30000);
+
+setInterval(()=>{
+ if(account.running)refresh();
+},30000);
 </script>
 </body>
 </html>
